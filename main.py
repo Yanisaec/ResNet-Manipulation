@@ -11,6 +11,7 @@ from utils import *
 _batchsize=8
 _seed=42
 _train=False
+_test_resnet18=False
 
 torch.manual_seed(_seed)
 torch.cuda.manual_seed(_seed)
@@ -25,19 +26,20 @@ def main():
     dataloader_train = DataLoader(dataset['train'], _batchsize)
     dataloader_test = DataLoader(dataset['test'], _batchsize)
 
+    if _test_resnet18:
+        resnet18_1 = ResNet18(hidden_sizes=[32, 64, 128, 256], n_class=10)
+
+        if _train:
+            train_model(dataloader_train, resnet18_1, 1, 'resnet18.pt')
+
+        resnet18_1.load_state_dict(torch.load('resnet18.pt', weights_only=True))
+
+        resnet18_2 = ResNet18(hidden_sizes=[32, 64, 128, 256], n_class=10)   
+
+        # test_widen(resnet18_1)
+        
+        test_permutation(resnet18_1, resnet18_2, dataloader_test, '18', 100)
     resnet18_1 = ResNet18(hidden_sizes=[32, 64, 128, 256], n_class=10)
-
-    if _train:
-        train_model(dataloader_train, resnet18_1, 1, 'resnet18.pt')
-
-    resnet18_1.load_state_dict(torch.load('resnet18.pt', weights_only=True))
-
-    resnet18_2 = ResNet18(hidden_sizes=[32, 64, 128, 256], n_class=10)   
-
-    test_widen(resnet18_1)
-    
-    test_permutation(resnet18_1, resnet18_2, dataloader_test, '18', 100)
-    
     breakpoint()
     resnet34_1 = ResNet34(hidden_sizes=[32, 64, 128, 256], n_class=10)
     resnet34_2 = ResNet34(hidden_sizes=[32, 64, 128, 256], n_class=10)  
