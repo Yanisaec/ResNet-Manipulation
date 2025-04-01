@@ -54,6 +54,8 @@ def average_models(models):
     """
     assert len(models) > 0, "Model list is empty"
 
+    models = [model.cuda() for model in models]
+    
     # Deep copy the first model to use as the base
     averaged_model = copy.deepcopy(models[0])
     averaged_state_dict = averaged_model.state_dict()
@@ -140,7 +142,7 @@ def evaluate_model(dataloader, model, nb_batch, print_=False):
     return tot_loss1, tot_acc1
     
 def compare_model_performances(dataloader, model1, model2, nb_batch, print_=False):
-    loss1, acc1 = evaluate_model(dataloader, model1, nb_batch, print_=print_)
-    loss2, acc2 = evaluate_model(dataloader, model2, nb_batch, print_=print_)
+    _, acc1 = evaluate_model(dataloader, model1, nb_batch, print_=print_)
+    _, acc2 = evaluate_model(dataloader, model2, nb_batch, print_=print_)
 
     return acc1, acc2
