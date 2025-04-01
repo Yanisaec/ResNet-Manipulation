@@ -2,8 +2,10 @@ import torch as th
 import numpy as np
 import copy 
 
-def wider(m1, m2, new_width, bnorm=None, out_size=None, noise=False,
+def wider(om1, om2, new_width, bnorm=None, out_size=None, noise=False,
           random_init=False, weight_norm=False, no_running=False, affine=True, random_mapping=None, divide=True):
+    m1 = copy.deepcopy(om1)
+    m2 = copy.deepcopy(om2)
     w1 = m1.weight.data
     w2 = m2.weight.data
     b1 = m1.bias.data if m1.bias is not None else None
@@ -175,6 +177,7 @@ def widen_resnet18(model, new_hidden_sizes=[64, 128, 256, 512], noise=False, ran
         noise: Whether to add noise to new weights
         random_init: Whether to initialize new weights randomly
         weight_norm: Whether to normalize weights
+        forced_mapping: Dictionnary that contains the mapping of the new channels
         
     Returns:
         Widened model
@@ -329,6 +332,316 @@ def widen_resnet18(model, new_hidden_sizes=[64, 128, 256, 512], noise=False, ran
     
     return model, mapping
 
+
+def is_connected_to_shortcut(name, connections):
+    for m1_name, m2_name, _, _ in connections:
+        if m1_name == name:
+            if 'shortcut' in m2_name:
+                return True
+    return False
+
+def widen_resnet(model, new_hidden_sizes=[64, 128, 256, 512], model_type=None, noise=False, random_init=False, weight_norm=False, forced_mapping=None, divide=True):
+    """
+    Widen any ResNet model to have new hidden sizes.
+    
+    Args:
+        model: The ResNet model to widen
+        new_hidden_sizes: List of integers representing the new widths for each layer
+        model_type: String indicating the ResNet type ('18', '34', '50', '101', '152'). 
+                    If None, it will be inferred from the model structure.
+        noise: Whether to add noise to new weights
+        random_init: Whether to initialize new weights randomly
+        weight_norm: Whether to normalize weights
+        forced_mapping: Dictionary that contains the mapping of the new channels
+        divide: Whether to divide weights when mapping to new channels
+        
+    Returns:
+        Widened model, mapping dictionary
+    """
+    import copy
+    
+    if len(new_hidden_sizes) != 4:
+        raise ValueError("new_hidden_sizes must have 4 elements for ResNet architecture")
+    
+    # Create a deep copy of the model to avoid modifying the original
+    model = copy.deepcopy(model)
+    
+    # Determine model type if not provided
+    if model_type is None:
+        # Check if it's a bottleneck architecture (ResNet50, 101, 152)
+        is_bottleneck = hasattr(model.layer1[0], 'conv3')
+        # Count the number of blocks to determine the specific model
+        num_blocks = [len(model.layer1), len(model.layer2), len(model.layer3), len(model.layer4)]
+        
+        if is_bottleneck:
+            if num_blocks == [3, 4, 6, 3]:
+                model_type = '50'
+            elif num_blocks == [3, 4, 23, 3]:
+                model_type = '101'
+            elif num_blocks == [3, 8, 36, 3]:
+                model_type = '152'
+        else:
+            if num_blocks == [2, 2, 2, 2]:
+                model_type = '18'
+            elif num_blocks == [3, 4, 6, 3]:
+                model_type = '34'
+    
+    # Check if we got a valid model type
+    if model_type not in ['18', '34', '50', '101', '152']:
+        raise ValueError(f"Unknown or unsupported ResNet model type: {model_type}")
+    
+    # Determine if we're dealing with a bottleneck architecture
+    is_bottleneck = model_type in ['50', '101', '152']
+    expansion = 4 if is_bottleneck else 1
+    
+    # Store all modules that need to be updated
+    modules = {}
+    
+    # First convolutional layer
+    modules['conv1'] = copy.deepcopy(model.conv1)
+    modules['norm1'] = copy.deepcopy(model.norm1)
+    
+    # Extract all layer modules
+    for layer_idx in range(1, 5):  # Layers 1-4
+        layer = getattr(model, f'layer{layer_idx}')
+        for block_idx in range(len(layer)):
+            if layer_idx > 1:
+                prev_block = copy.deepcopy(block)
+            block = layer[block_idx]
+            if block_idx < len(layer)-1:
+                future_block = layer[block_idx+1]
+            
+            # Main path modules
+            modules[f'l{layer_idx}_b{block_idx}_conv1'] = copy.deepcopy(block.conv1)
+            modules[f'l{layer_idx}_b{block_idx}_norm1'] = copy.deepcopy(block.norm1)
+            modules[f'l{layer_idx}_b{block_idx}_conv2'] = copy.deepcopy(block.conv2)
+            modules[f'l{layer_idx}_b{block_idx}_norm2'] = copy.deepcopy(block.norm2)
+            
+            # Bottleneck architecture has an additional conv3 layer
+            if is_bottleneck:
+                modules[f'l{layer_idx}_b{block_idx}_conv3'] = copy.deepcopy(block.conv3)
+                modules[f'l{layer_idx}_b{block_idx}_norm3'] = copy.deepcopy(block.norm3)
+            
+            # Shortcut modules (if exists)
+            if len(block.shortcut) > 0:
+                if layer_idx > 1:
+                    modules[f'l{layer_idx-1}_b{prev_block_idx}_conv2_for_sc'] = copy.deepcopy(prev_block.conv2)
+                    modules[f'l{layer_idx-1}_b{prev_block_idx}_norm2_for_sc'] = copy.deepcopy(prev_block.norm2)
+                    modules[f'l{layer_idx}_b{block_idx+1}_conv1_for_sc'] = copy.deepcopy(future_block.conv1)
+                    modules[f'l{layer_idx}_b{block_idx}_shortcut_conv'] = copy.deepcopy(block.shortcut[0])
+                    modules[f'l{layer_idx}_b{block_idx}_shortcut_norm'] = copy.deepcopy(block.shortcut[1])                    
+                else:
+                    modules[f'conv1_for_sc'] = copy.deepcopy(model.conv1)
+                    modules[f'norm1_for_sc'] = copy.deepcopy(model.norm1)
+                    modules[f'l{layer_idx}_b{block_idx+1}_conv1_for_sc'] = copy.deepcopy(future_block.conv1)
+                    modules[f'l{layer_idx}_b{block_idx}_shortcut_conv'] = copy.deepcopy(block.shortcut[0])
+                    modules[f'l{layer_idx}_b{block_idx}_shortcut_norm'] = copy.deepcopy(block.shortcut[1])
+
+            
+            prev_block_idx = block_idx
+    
+    # Final linear layer
+    modules['linear'] = copy.deepcopy(model.linear)
+    
+    # Define the connections between modules for widening
+    connections = []
+    
+    # Input to first block connection
+    connections.append(('conv1', f'l1_b0_conv1', 'norm1', new_hidden_sizes[0]))
+    
+    # Process each layer
+    for layer_idx in range(1, 5):
+        layer = getattr(model, f'layer{layer_idx}')
+        current_width = new_hidden_sizes[layer_idx-1]
+        
+        for block_idx in range(len(layer)):
+            # Determine input and output widths for this block
+            # For layer transitions or stride=2 blocks, we need to handle different widths
+            prev_layer_idx = layer_idx
+            prev_block_idx = block_idx - 1
+            
+            # Handle cases where we're at the first block of a layer
+            if block_idx == 0 and layer_idx > 1:
+                prev_layer_idx = layer_idx - 1
+                prev_block_idx = len(getattr(model, f'layer{prev_layer_idx}')) - 1
+            
+            # For bottleneck architecture
+            if is_bottleneck:
+                # conv1: in_planes -> planes
+                modules_in_width = current_width * expansion if block_idx == 0 and layer_idx > 1 else current_width * expansion if block_idx > 0 else new_hidden_sizes[layer_idx-2] * expansion if layer_idx > 1 else new_hidden_sizes[0]
+                connections.append((
+                    f'l{layer_idx}_b{block_idx}_conv1',
+                    f'l{layer_idx}_b{block_idx}_conv2',
+                    f'l{layer_idx}_b{block_idx}_norm1',
+                    current_width
+                ))
+                
+                # conv2: planes -> planes
+                connections.append((
+                    f'l{layer_idx}_b{block_idx}_conv2',
+                    f'l{layer_idx}_b{block_idx}_conv3',
+                    f'l{layer_idx}_b{block_idx}_norm2',
+                    current_width
+                ))
+                
+                # conv3: planes -> planes * expansion
+                if block_idx < len(layer) - 1:
+                    next_module = f'l{layer_idx}_b{block_idx+1}_conv1'
+                elif layer_idx < 4:
+                    next_module = f'l{layer_idx+1}_b0_conv1'
+                else:
+                    next_module = 'linear'
+                
+                connections.append((
+                    f'l{layer_idx}_b{block_idx}_conv3',
+                    next_module,
+                    f'l{layer_idx}_b{block_idx}_norm3',
+                    current_width * expansion
+                ))
+                
+                # Shortcut connection if needed
+                if len(layer[block_idx].shortcut) > 0:
+                    shortcut_in_width = new_hidden_sizes[layer_idx-2] * expansion if layer_idx > 1 else new_hidden_sizes[0]
+                    connections.append((
+                        f'l{prev_layer_idx}_b{prev_block_idx}_conv3' if prev_block_idx >= 0 else 'conv1_for_sc',
+                        f'l{layer_idx}_b{block_idx}_shortcut_conv',
+                        f'l{prev_layer_idx}_b{prev_block_idx}_norm3' if prev_block_idx >= 0 else 'norm1_for_sc',
+                        shortcut_in_width
+                    ))
+                    
+                    connections.append((
+                        f'l{layer_idx}_b{block_idx}_shortcut_conv',
+                        f'l{layer_idx}_b{block_idx+1}_conv1' if block_idx < len(layer) - 1 else f'l{layer_idx+1}_b0_conv1' if layer_idx < 4 else 'linear',
+                        f'l{layer_idx}_b{block_idx}_shortcut_norm',
+                        current_width * expansion
+                    ))
+            
+            # For basic block architecture (ResNet18, 34)
+            else:
+                # conv1: in_planes -> planes
+                modules_in_width = current_width if block_idx == 0 and layer_idx > 1 else current_width if block_idx > 0 else new_hidden_sizes[layer_idx-2] if layer_idx > 1 else new_hidden_sizes[0]
+                connections.append((
+                    f'l{layer_idx}_b{block_idx}_conv1',
+                    f'l{layer_idx}_b{block_idx}_conv2',
+                    f'l{layer_idx}_b{block_idx}_norm1',
+                    current_width
+                ))
+                
+                # conv2: planes -> planes
+                if block_idx < len(layer) - 1:
+                    next_module = f'l{layer_idx}_b{block_idx+1}_conv1'
+                elif layer_idx < 4:
+                    next_module = f'l{layer_idx+1}_b0_conv1'
+                else:
+                    next_module = 'linear'
+                
+                connections.append((
+                    f'l{layer_idx}_b{block_idx}_conv2',
+                    next_module,
+                    f'l{layer_idx}_b{block_idx}_norm2',
+                    current_width
+                ))
+                
+                # Shortcut connection if needed
+                if len(layer[block_idx].shortcut) > 0:
+                    shortcut_in_width = new_hidden_sizes[layer_idx-2] if layer_idx > 1 else new_hidden_sizes[0]
+                    connections.append((
+                        f'l{prev_layer_idx}_b{prev_block_idx}_conv2_for_sc' if prev_block_idx >= 0 else 'conv1',
+                        f'l{layer_idx}_b{block_idx}_shortcut_conv',
+                        f'l{prev_layer_idx}_b{prev_block_idx}_norm2_for_sc' if prev_block_idx >= 0 else 'norm1',
+                        shortcut_in_width
+                    ))
+                    
+                    connections.append((
+                        f'l{layer_idx}_b{block_idx}_shortcut_conv',
+                        f'l{layer_idx}_b{block_idx+1}_conv1_for_sc' if block_idx < len(layer) - 1 else f'l{layer_idx+1}_b0_conv1' if layer_idx < 4 else 'linear',
+                        f'l{layer_idx}_b{block_idx}_shortcut_norm',
+                        current_width
+                    ))
+    
+    # Apply wider operation to each connection
+    mapping = {}
+    for m1_name, m2_name, bn_name, new_width in connections:
+        if not m1_name in modules or not m2_name in modules:
+            continue  # Skip if modules don't exist
+        
+        m1 = modules[m1_name]
+        m2 = modules[m2_name]
+        bn = modules[bn_name] if bn_name in modules else None
+        
+        # Apply wider operation
+        if m1_name == 'conv1' and forced_mapping is not None:
+            rm = forced_mapping['conv1']
+        elif m1_name != 'conv1' and 'l1' in m1_name:
+            if forced_mapping is not None:
+                rm = forced_mapping['conv1']
+            else:
+                rm = mapping['conv1']
+        elif m1_name != 'l2_b0_conv1' and 'l2' in m1_name:
+            if forced_mapping is not None:
+                rm = forced_mapping['l2_b0_conv1']
+            else:
+                rm = mapping['l2_b0_conv1']
+        elif m1_name != 'l3_b0_conv1' and 'l3' in m1_name:
+            if forced_mapping is not None:
+                rm = forced_mapping['l3_b0_conv1']
+            else:
+                rm = mapping['l3_b0_conv1']
+        elif m1_name != 'l4_b0_conv1' and 'l4' in m1_name:
+            if forced_mapping is not None:
+                rm = forced_mapping['l4_b0_conv1']
+            else:
+                rm = mapping['l4_b0_conv1']
+        elif forced_mapping is not None:
+            rm = forced_mapping[m1_name]
+        else:
+            rm = None
+            
+        m1, m2, bn, random_mapping = wider(om1=m1, om2=m2, new_width=new_width, bnorm=bn, noise=noise, random_init=random_init, weight_norm=weight_norm, random_mapping=rm, divide=divide)
+
+        mapping[m1_name] = random_mapping
+
+        # Update modules dict with the widened modules
+        # if not is_connected_to_shortcut(m1_name, connections):
+        modules[m1_name] = m1
+        modules[m2_name] = m2
+        if bn_name and bn_name in modules:
+            modules[bn_name] = bn
+
+    # Update model with widened modules
+    model.conv1 = modules['conv1']
+    model.norm1 = modules['norm1']
+    
+    # Update model's in_planes attribute to reflect the new sizes
+    model.in_planes = new_hidden_sizes[3] * expansion
+    
+    # Update all layers
+    for layer_idx in range(1, 5):  # Layers 1-4
+        layer = getattr(model, f'layer{layer_idx}')
+        for block_idx in range(len(layer)):
+            block = layer[block_idx]
+            
+            # Update main path modules
+            block.conv1 = modules[f'l{layer_idx}_b{block_idx}_conv1']
+            block.norm1 = modules[f'l{layer_idx}_b{block_idx}_norm1']
+            block.conv2 = modules[f'l{layer_idx}_b{block_idx}_conv2']
+            block.norm2 = modules[f'l{layer_idx}_b{block_idx}_norm2']
+            
+            # Update bottleneck-specific modules
+            if is_bottleneck:
+                block.conv3 = modules[f'l{layer_idx}_b{block_idx}_conv3']
+                block.norm3 = modules[f'l{layer_idx}_b{block_idx}_norm3']
+            
+            # Update shortcut modules (if exists)
+            if len(block.shortcut) > 0:
+                block.shortcut[0] = modules[f'l{layer_idx}_b{block_idx}_shortcut_conv']
+                block.shortcut[1] = modules[f'l{layer_idx}_b{block_idx}_shortcut_norm']
+    
+    # Update linear layer
+    model.linear = modules['linear']
+    
+    return model, mapping
+
 def unwiden_resnet18(model_original_dict, model_widened_dict):
     unwidened_model_dict = {}
     for key in model_original_dict:
@@ -345,3 +658,10 @@ def unwiden_resnet18(model_original_dict, model_widened_dict):
         unwidened_model_dict[key] = new_w
     
     return unwidened_model_dict
+
+def test_widen(model, new_hidden_sizes=[64, 128, 256, 512], model_type=None, divide=True):
+    dummy = th.randn(1, 3, 32, 32)
+    output_original = model(dummy)
+    model_widened, _ = widen_resnet(model, new_hidden_sizes=new_hidden_sizes, model_type=model_type, divide=divide)
+    new_output = model_widened(dummy)
+    print(f'Norm difference between before and after widening the model: {th.norm(output_original-new_output)}')

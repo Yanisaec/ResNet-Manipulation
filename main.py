@@ -1,5 +1,4 @@
 from torch.utils.data import DataLoader
-import random
 
 from resnet import *
 from datasets.dataset import *
@@ -13,9 +12,9 @@ _seed=42
 _train=False
 _test_resnet18=False
 _test_resnet34=False
-_test_resnet50=False
+_test_resnet50=True
 _test_resnet101=False
-_test_resnet152=True
+_test_resnet152=False
 
 torch.manual_seed(_seed)
 torch.cuda.manual_seed(_seed)
@@ -34,15 +33,15 @@ def main():
         resnet18_1 = ResNet18(hidden_sizes=[32, 64, 128, 256], n_class=10)
 
         if _train:
-            train_model(dataloader_train, resnet18_1, 1, '/checkpoints/resnet18.pt')
+            train_model(dataloader_train, resnet18_1, 1, 'checkpoints/resnet18.pt')
 
-        resnet18_1.load_state_dict(torch.load('/checkpoints/resnet18.pt', weights_only=True))
+        resnet18_1.load_state_dict(torch.load('checkpoints/resnet18.pt', weights_only=True))
 
         resnet18_2 = ResNet18(hidden_sizes=[32, 64, 128, 256], n_class=10)   
 
-        # test_widen(resnet18_1)
+        test_widen(resnet18_1, model_type='18')
         
-        test_permutation(resnet18_1, resnet18_2, dataloader_test, '18', 1000)
+        # test_permutation(resnet18_1, resnet18_2, dataloader_test, '18', 1000)
 
     if _test_resnet34:
         resnet34_1 = ResNet34(hidden_sizes=[32, 64, 128, 256], n_class=10)
@@ -54,7 +53,9 @@ def main():
 
         resnet34_2 = ResNet34(hidden_sizes=[32, 64, 128, 256], n_class=10)  
 
-        test_permutation(resnet34_1, resnet34_2, dataloader_test, '34', 1000) 
+        test_widen(resnet34_1, model_type='34')
+
+        # test_permutation(resnet34_1, resnet34_2, dataloader_test, '34', 1000) 
         
     if _test_resnet50:
         resnet50_1 = ResNet50(hidden_sizes=[32, 64, 128, 256], n_class=10)
@@ -66,7 +67,9 @@ def main():
 
         resnet50_2 = ResNet50(hidden_sizes=[32, 64, 128, 256], n_class=10)
 
-        test_permutation(resnet50_1, resnet50_2, dataloader_test, '50', 1000)      
+        test_widen(resnet50_1, model_type='50')
+
+        # test_permutation(resnet50_1, resnet50_2, dataloader_test, '50', 1000)      
     
     if _test_resnet101:
         resnet101_1 = ResNet101(hidden_sizes=[32, 64, 128, 256], n_class=10)
