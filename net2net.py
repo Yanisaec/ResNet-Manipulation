@@ -1,9 +1,6 @@
 import torch as th
 import numpy as np
-from collections import Counter
-import torch.nn as nn
 import copy 
-import torch_pruning as tp
 
 def wider(m1, m2, new_width, bnorm=None, out_size=None, noise=False,
           random_init=False, weight_norm=False, no_running=False, affine=True, random_mapping=None, divide=True):
@@ -348,96 +345,3 @@ def unwiden_resnet18(model_original_dict, model_widened_dict):
         unwidened_model_dict[key] = new_w
     
     return unwidened_model_dict
-
-def get_layer_by_name(model, layer_name):
-    for name, layer in model.named_modules():
-        if name == layer_name:
-            return layer
-    return None  # Return None if layer is not found
-    
-def compare_model_architecture(model1: nn.Module, model2: nn.Module) -> bool:
-    model1_layers = list(model1.named_modules())
-    model2_layers = list(model2.named_modules())
-
-    if len(model1_layers) != len(model2_layers):
-        print("Mismatch in the number of layers")
-        return False
-
-    for i, (a, b) in enumerate(zip(model1_layers, model2_layers)):
-        (name1, layer1) = a
-        (name2, layer2) = b
-        if name1 != name2:
-            print(f"Layer name mismatch: {name1} != {name2}")
-            return False
-        if type(layer1) is not type(layer2) and i > 0:
-            print(f"Layer type mismatch at {name1}: {type(layer1)} != {type(layer2)}")
-            return False
-        if isinstance(layer1, nn.Conv2d):
-            if (layer1.in_channels != layer2.in_channels or 
-                layer1.out_channels != layer2.out_channels or
-                layer1.kernel_size != layer2.kernel_size or
-                layer1.stride != layer2.stride or
-                layer1.padding != layer2.padding):
-                print(f"Conv2d mismatch at {name1}")
-                return False
-        if isinstance(layer1, nn.Linear):
-            if layer1.in_features != layer2.in_features or layer1.out_features != layer2.out_features:
-                print(f"Linear layer mismatch at {name1}")
-                return False
-        if isinstance(layer1, nn.BatchNorm2d):
-            if layer1.num_features != layer2.num_features:
-                print(f"BatchNorm2d mismatch at {name1}")
-                return False 
-
-    return True  
-
-def average_models(models):
-    """
-    Given a list of N PyTorch models with the same architecture,
-    returns a new model with the averaged weights.
-    """
-    assert len(models) > 0, "Model list is empty"
-
-    # Deep copy the first model to use as the base
-    averaged_model = copy.deepcopy(models[0])
-    averaged_state_dict = averaged_model.state_dict()
-
-    # Initialize an empty dictionary to accumulate weights
-    for key in averaged_state_dict.keys():
-        averaged_state_dict[key] = th.zeros_like(averaged_state_dict[key])
-
-    # Accumulate weights from all models
-    for model in models:
-        for key in averaged_state_dict.keys():
-            averaged_state_dict[key] += model.state_dict()[key]
-
-    # Compute the mean
-    for key in averaged_state_dict.keys():
-        averaged_state_dict[key] /= len(models)
-
-    # Load the averaged weights into the new model
-    averaged_model.load_state_dict(averaged_state_dict)
-
-    return averaged_model
-
-def prune_model(model, pruning_ratio=0.5, out_features=10):
-    global_model = copy.deepcopy(model)
-    global_model = global_model.cpu().eval()
-    example_inputs = th.randn(1, 3, 32, 32)
-    imp = tp.importance.GroupNormImportance(p=2) 
-    ignored_layers = []
-    for m in global_model.modules():
-        if isinstance(m, th.nn.Linear) and m.out_features == out_features:
-            ignored_layers.append(m)
-
-    pruner = tp.pruner.MetaPruner(
-        global_model,
-        example_inputs,
-        importance=imp,
-        pruning_ratio=pruning_ratio,
-        ignored_layers=ignored_layers,
-        round_to=8, 
-    )
-    pruner.step()
-
-    return global_model

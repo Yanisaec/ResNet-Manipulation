@@ -7,30 +7,40 @@ root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if root_path not in sys.path:
     sys.path.append(root_path)
 
-from base_resnet import ResNet, BasicBlock
-from git_rebasin.weight_matching import (apply_permutation, resnet18_permutation_spec, weight_matching, reverse_permutation_model)
+from git_rebasin.weight_matching import *
 from git_rebasin.utils import (flatten_params, unflatten_params)
+from utils import average_models, evaluate_model, compare_model_performances
 
-from net2net import widen_resnet18, unwiden_resnet18
-
-import torch.nn as nn
 import numpy as np
 from jax import random
 import torch
 
-def get_number_permutations_differences(perm1, perm2):
+def get_share_permutations_differences(perm1, perm2, factor):
     differences = {}
     for key in perm1.keys():
-        differences[key] = int(np.sum(perm1[key][:len(perm1[key])//2] != perm2[key][:len(perm1[key])//2]))
+        differences[key] = int(np.sum(perm1[key][:len(perm1[key])//factor] != perm2[key][:len(perm1[key])//factor])) / len(perm1[key][:len(perm1[key])//factor])
     return differences
 
-def permute_resnet18(ref_model, model_to_permute):
+def permute_resnet(ref_model, model_to_permute, resnet_model: str):
     model_a_dict = ref_model.state_dict()
     model_b_dict = model_to_permute.state_dict()
     model_a_dict = {key: value.cpu().numpy() for key, value in model_a_dict.items()}
     model_b_dict = {key: value.cpu().numpy() for key, value in model_b_dict.items()}
 
-    permutation_spec = resnet18_permutation_spec()
+    match resnet_model:
+        case '18':
+            permutation_spec = resnet18_permutation_spec()
+        case '34':
+            permutation_spec = resnet34_permutation_spec()        
+        case '50':
+            permutation_spec = resnet50_permutation_spec()        
+        case '101':
+            permutation_spec = resnet101_permutation_spec()
+        case '152':
+            permutation_spec = resnet152_permutation_spec()       
+        case _:
+            raise Exception(f'The following ResNet architecture is not supported for permutation: {resnet_model}')
+
     final_permutation = weight_matching(random.PRNGKey(42), permutation_spec,
                                         flatten_params(model_a_dict), flatten_params(model_b_dict), silent=True)
 
@@ -43,53 +53,21 @@ def permute_resnet18(ref_model, model_to_permute):
 
     return model_to_permute, permutation_spec, final_permutation
 
-def main():
-    model_a = ResNet(block=BasicBlock, num_blocks=[2,2,2,2], norm_layer=nn.BatchNorm2d, hidden_sizes=[32, 64, 128, 256], n_class=100)
-    model_b = ResNet(block=BasicBlock, num_blocks=[2,2,2,2], norm_layer=nn.BatchNorm2d, hidden_sizes=[32, 64, 128, 256], n_class=100)
-    model_c = ResNet(block=BasicBlock, num_blocks=[2,2,2,2], norm_layer=nn.BatchNorm2d, hidden_sizes=[16, 32, 64, 128], n_class=100)
-    model_c_widen = widen_resnet18(model_c, [32, 64, 128, 256])[0]
+def reverse_permutation_model(ps: PermutationSpec, perm, params):
+  return {k: torch.from_numpy(np.array(get_reverse_permuted_param(ps, perm, k, params))) for k in params.keys()}
 
-    # original_model_c_dict = unwiden_resnet18(model_c, model_c_widen)
+def test_permutation(model1, model2, dataloader, resnet_model: str, nb_batches=100):
+    averaged_model = average_models([model1, model2])
+    evaluate_model(dataloader, averaged_model, nb_batches, print_=True)
 
-    # tot=0
-    # for key in model_c.state_dict().keys():
-    #     share = (torch.sum(model_c.state_dict()[key] == original_model_c_dict[key])) / (torch.sum(model_c.state_dict()[key] == original_model_c_dict[key]) + torch.sum(model_c.state_dict()[key] != original_model_c_dict[key]))
-    #     tot += share
-    # tot /=len(model_c.state_dict().keys())
+    acc1, acc2 = compare_model_performances(dataloader, model1, model2, nb_batches, print_=False)
+    if acc1 >= acc2:
+        model2, _, _ = permute_resnet(model1, model2, resnet_model)
+    else:
+        model1, _, _ = permute_resnet(model2, model1, resnet_model)
 
-    ignored_keys = {"norm4.weight", "norm4.bias"}
-    checkpoint_a = torch.load('C:/Users/boite/Desktop/small_to_big/FIARSE_FedRolex/benchmark_logs/fiarse_cifar100_100_500_1_[1.0]_[100]_[32, 64, 128, 256]_1.0_epoch_500.pt', map_location="cpu")
-    filtered_state_dict_a = {k: v for k, v in checkpoint_a.items() if k not in ignored_keys}
-    # checkpoint_b = torch.load('C:/Users/boite/Desktop/small_to_big/FIARSE_FedRolex/benchmark_logs/fedrolex_cifar100_100_500_1_[1.0]_[100]_[32, 64, 128, 256]_1.0_epoch_500.pt', map_location="cpu")
-    # filtered_state_dict_b = {k: v for k, v in checkpoint_b.items() if k not in ignored_keys}
-    model_a.load_state_dict(filtered_state_dict_a)
-    # model_b.load_state_dict(filtered_state_dict_b)
+    averaged_model = average_models([model1, model2])
 
-    model_a_dict = model_a.state_dict()
-    model_b_dict = model_b.state_dict()
-    model_a_dict = {key: value.cpu().numpy() for key, value in model_a_dict.items()}
-    model_b_dict = {key: value.cpu().numpy() for key, value in model_b_dict.items()}
-
-    permutation_spec = resnet18_permutation_spec()
-    final_permutation = weight_matching(random.PRNGKey(42), permutation_spec,
-                                        flatten_params(model_a_dict), flatten_params(model_b_dict), silent=True)
-
-    model_b_clever = unflatten_params(
-        apply_permutation(permutation_spec, final_permutation, flatten_params(model_b_dict)))
-
-    model_b_clever = {key: torch.from_numpy(np.array(value)) for key, value in model_b_clever.items()}
+    print('After Permutation:')
     
-    model_b_unpermuted = reverse_permutation_model(permutation_spec, final_permutation, flatten_params(model_b_clever))
-
-    tot = 0
-    for key in model_b_dict.keys():
-        share = (np.sum(model_b_dict[key] == model_b_unpermuted[key])) / (np.sum(model_b_dict[key] == model_b_unpermuted[key]) + np.sum(model_b_dict[key] != model_b_unpermuted[key]))
-        tot += share
-    tot /= len(model_b_dict.keys())
-
-    model_b.load_state_dict(model_b_clever)
-
-    # torch.save(model_b.state_dict(), 'C:/Users/boite/Desktop/FIARSE_FedRolex/model_fedrolex_2_permuted.pt')
-
-if __name__ == "__main__":
-    main()
+    evaluate_model(dataloader, averaged_model, nb_batches, print_=True)

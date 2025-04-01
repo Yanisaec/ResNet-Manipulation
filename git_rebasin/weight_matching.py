@@ -30,9 +30,6 @@ def permutation_spec_from_axes_to_perm(axes_to_perm: dict) -> PermutationSpec:
   return PermutationSpec(perm_to_axes=dict(perm_to_axes), axes_to_perm=axes_to_perm)
 
 def resnet18_permutation_spec() -> PermutationSpec:
-    # conv = lambda name, p_in, p_out: {f"{name}.weight": (None, None, p_in, p_out)}
-    # norm = lambda name, p: {f"{name}.weight": (p,), f"{name}.bias": (p,)}
-    # dense = lambda name, p_in, p_out: {f"{name}.weight": (p_in, p_out), f"{name}.bias": (p_out,)}
     conv = lambda name, p_in, p_out: {f"{name}.weight": (p_out, p_in, None, None, )}
     norm = lambda name, p: {f"{name}.weight": (p, ), f"{name}.bias": (p, )}
     dense = lambda name, p_in, p_out: {f"{name}.weight": (p_out, p_in), f"{name}.bias": (p_out, )}
@@ -49,8 +46,8 @@ def resnet18_permutation_spec() -> PermutationSpec:
         **norm(f"{name}.norm1", f"P_{name}_inner"),
         **conv(f"{name}.conv2", f"P_{name}_inner", p_out),
         **norm(f"{name}.norm2", p_out),
-        **conv(f"{name}.shortcut.0", p_in, p_out),  # Mapping shortcut conv layer
-        **norm(f"{name}.shortcut.1", p_out),  # Mapping shortcut BN layer
+        **conv(f"{name}.shortcut.0", p_in, p_out),  
+        **norm(f"{name}.shortcut.1", p_out),  
     }
 
     return permutation_spec_from_axes_to_perm({
@@ -72,6 +69,224 @@ def resnet18_permutation_spec() -> PermutationSpec:
         **dense("linear", "P_bg3", None),
     })
 
+def resnet34_permutation_spec() -> PermutationSpec:
+  conv = lambda name, p_in, p_out: {f"{name}.weight": (p_out, p_in, None, None)}
+  norm = lambda name, p: {f"{name}.weight": (p,), f"{name}.bias": (p,)}
+  dense = lambda name, p_in, p_out: {f"{name}.weight": (p_out, p_in), f"{name}.bias": (p_out,)}
+  
+  easyblock = lambda name, p: {
+      **conv(f"{name}.conv1", p, f"P_{name}_inner"),
+      **norm(f"{name}.norm1", f"P_{name}_inner"),
+      **conv(f"{name}.conv2", f"P_{name}_inner", p),
+      **norm(f"{name}.norm2", p),
+  }
+  shortcutblock = lambda name, p_in, p_out: {
+      **conv(f"{name}.conv1", p_in, f"P_{name}_inner"),
+      **norm(f"{name}.norm1", f"P_{name}_inner"),
+      **conv(f"{name}.conv2", f"P_{name}_inner", p_out),
+      **norm(f"{name}.norm2", p_out),
+      **conv(f"{name}.shortcut.0", p_in, p_out),
+      **norm(f"{name}.shortcut.1", p_out),
+  }
+  
+  return permutation_spec_from_axes_to_perm({
+      **conv("conv1", None, "P_bg0"),
+      **norm("norm1", "P_bg0"),
+      
+      # Layer 1 (3 blocks)
+      **easyblock("layer1.0", "P_bg0"),
+      **easyblock("layer1.1", "P_bg0"),
+      **easyblock("layer1.2", "P_bg0"),
+      
+      # Layer 2 (4 blocks)
+      **shortcutblock("layer2.0", "P_bg0", "P_bg1"),
+      **easyblock("layer2.1", "P_bg1"),
+      **easyblock("layer2.2", "P_bg1"),
+      **easyblock("layer2.3", "P_bg1"),
+      
+      # Layer 3 (6 blocks)
+      **shortcutblock("layer3.0", "P_bg1", "P_bg2"),
+      **easyblock("layer3.1", "P_bg2"),
+      **easyblock("layer3.2", "P_bg2"),
+      **easyblock("layer3.3", "P_bg2"),
+      **easyblock("layer3.4", "P_bg2"),
+      **easyblock("layer3.5", "P_bg2"),
+      
+      # Layer 4 (3 blocks)
+      **shortcutblock("layer4.0", "P_bg2", "P_bg3"),
+      **easyblock("layer4.1", "P_bg3"),
+      **easyblock("layer4.2", "P_bg3"),
+      
+      **dense("linear", "P_bg3", None),
+  })
+
+def resnet50_permutation_spec() -> PermutationSpec:
+  conv = lambda name, p_in, p_out: {f"{name}.weight": (p_out, p_in, None, None)}
+  norm = lambda name, p: {f"{name}.weight": (p,), f"{name}.bias": (p,)}
+  dense = lambda name, p_in, p_out: {f"{name}.weight": (p_out, p_in), f"{name}.bias": (p_out,)}
+  
+  # Bottleneck block without shortcut
+  bottleneck = lambda name, p_in, p_out: {
+      **conv(f"{name}.conv1", p_in, f"P_{name}_inner1"),
+      **norm(f"{name}.norm1", f"P_{name}_inner1"),
+      **conv(f"{name}.conv2", f"P_{name}_inner1", f"P_{name}_inner2"),
+      **norm(f"{name}.norm2", f"P_{name}_inner2"),
+      **conv(f"{name}.conv3", f"P_{name}_inner2", p_out),
+      **norm(f"{name}.norm3", p_out),
+  }
+  
+  # Bottleneck block with shortcut
+  shortcut_bottleneck = lambda name, p_in, p_out: {
+      **conv(f"{name}.conv1", p_in, f"P_{name}_inner1"),
+      **norm(f"{name}.norm1", f"P_{name}_inner1"),
+      **conv(f"{name}.conv2", f"P_{name}_inner1", f"P_{name}_inner2"),
+      **norm(f"{name}.norm2", f"P_{name}_inner2"),
+      **conv(f"{name}.conv3", f"P_{name}_inner2", p_out),
+      **norm(f"{name}.norm3", p_out),
+      **conv(f"{name}.shortcut.0", p_in, p_out),
+      **norm(f"{name}.shortcut.1", p_out),
+  }
+  
+  return permutation_spec_from_axes_to_perm({
+      **conv("conv1", None, "P_bg0"),
+      **norm("norm1", "P_bg0"),
+      
+      # Layer 1 (3 blocks)
+      **shortcut_bottleneck("layer1.0", "P_bg0", "P_bg0_x4"),
+      **bottleneck("layer1.1", "P_bg0_x4", "P_bg0_x4"),
+      **bottleneck("layer1.2", "P_bg0_x4", "P_bg0_x4"),
+      
+      # Layer 2 (4 blocks)
+      **shortcut_bottleneck("layer2.0", "P_bg0_x4", "P_bg1_x4"),
+      **bottleneck("layer2.1", "P_bg1_x4", "P_bg1_x4"),
+      **bottleneck("layer2.2", "P_bg1_x4", "P_bg1_x4"),
+      **bottleneck("layer2.3", "P_bg1_x4", "P_bg1_x4"),
+      
+      # Layer 3 (6 blocks)
+      **shortcut_bottleneck("layer3.0", "P_bg1_x4", "P_bg2_x4"),
+      **bottleneck("layer3.1", "P_bg2_x4", "P_bg2_x4"),
+      **bottleneck("layer3.2", "P_bg2_x4", "P_bg2_x4"),
+      **bottleneck("layer3.3", "P_bg2_x4", "P_bg2_x4"),
+      **bottleneck("layer3.4", "P_bg2_x4", "P_bg2_x4"),
+      **bottleneck("layer3.5", "P_bg2_x4", "P_bg2_x4"),
+      
+      # Layer 4 (3 blocks)
+      **shortcut_bottleneck("layer4.0", "P_bg2_x4", "P_bg3_x4"),
+      **bottleneck("layer4.1", "P_bg3_x4", "P_bg3_x4"),
+      **bottleneck("layer4.2", "P_bg3_x4", "P_bg3_x4"),
+      
+      **dense("linear", "P_bg3_x4", None),
+  })
+
+def resnet101_permutation_spec() -> PermutationSpec:
+  conv = lambda name, p_in, p_out: {f"{name}.weight": (p_out, p_in, None, None)}
+  norm = lambda name, p: {f"{name}.weight": (p,), f"{name}.bias": (p,)}
+  dense = lambda name, p_in, p_out: {f"{name}.weight": (p_out, p_in), f"{name}.bias": (p_out,)}
+  
+  bottleneck = lambda name, p_in, p_out: {
+      **conv(f"{name}.conv1", p_in, f"P_{name}_inner1"),
+      **norm(f"{name}.norm1", f"P_{name}_inner1"),
+      **conv(f"{name}.conv2", f"P_{name}_inner1", f"P_{name}_inner2"),
+      **norm(f"{name}.norm2", f"P_{name}_inner2"),
+      **conv(f"{name}.conv3", f"P_{name}_inner2", p_out),
+      **norm(f"{name}.norm3", p_out),
+  }
+  
+  shortcut_bottleneck = lambda name, p_in, p_out: {
+      **conv(f"{name}.conv1", p_in, f"P_{name}_inner1"),
+      **norm(f"{name}.norm1", f"P_{name}_inner1"),
+      **conv(f"{name}.conv2", f"P_{name}_inner1", f"P_{name}_inner2"),
+      **norm(f"{name}.norm2", f"P_{name}_inner2"),
+      **conv(f"{name}.conv3", f"P_{name}_inner2", p_out),
+      **norm(f"{name}.norm3", p_out),
+      **conv(f"{name}.shortcut.0", p_in, p_out),
+      **norm(f"{name}.shortcut.1", p_out),
+  }
+  
+  spec_dict = {
+      **conv("conv1", None, "P_bg0"),
+      **norm("norm1", "P_bg0"),
+      
+      # Layer 1 (3 blocks)
+      **shortcut_bottleneck("layer1.0", "P_bg0", "P_bg0_x4"),
+      **bottleneck("layer1.1", "P_bg0_x4", "P_bg0_x4"),
+      **bottleneck("layer1.2", "P_bg0_x4", "P_bg0_x4"),
+      
+      # Layer 2 (4 blocks)
+      **shortcut_bottleneck("layer2.0", "P_bg0_x4", "P_bg1_x4"),
+      **bottleneck("layer2.1", "P_bg1_x4", "P_bg1_x4"),
+      **bottleneck("layer2.2", "P_bg1_x4", "P_bg1_x4"),
+      **bottleneck("layer2.3", "P_bg1_x4", "P_bg1_x4"),
+  }
+  
+  # Layer 3 (23 blocks)
+  spec_dict.update(shortcut_bottleneck("layer3.0", "P_bg1_x4", "P_bg2_x4"))
+  for i in range(1, 23):
+      spec_dict.update(bottleneck(f"layer3.{i}", "P_bg2_x4", "P_bg2_x4"))
+  
+  # Layer 4 (3 blocks)
+  spec_dict.update(shortcut_bottleneck("layer4.0", "P_bg2_x4", "P_bg3_x4"))
+  spec_dict.update(bottleneck("layer4.1", "P_bg3_x4", "P_bg3_x4"))
+  spec_dict.update(bottleneck("layer4.2", "P_bg3_x4", "P_bg3_x4"))
+  
+  spec_dict.update(dense("linear", "P_bg3_x4", None))
+  
+  return permutation_spec_from_axes_to_perm(spec_dict)
+
+def resnet152_permutation_spec() -> PermutationSpec:
+  conv = lambda name, p_in, p_out: {f"{name}.weight": (p_out, p_in, None, None)}
+  norm = lambda name, p: {f"{name}.weight": (p,), f"{name}.bias": (p,)}
+  dense = lambda name, p_in, p_out: {f"{name}.weight": (p_out, p_in), f"{name}.bias": (p_out,)}
+  
+  bottleneck = lambda name, p_in, p_out: {
+      **conv(f"{name}.conv1", p_in, f"P_{name}_inner1"),
+      **norm(f"{name}.norm1", f"P_{name}_inner1"),
+      **conv(f"{name}.conv2", f"P_{name}_inner1", f"P_{name}_inner2"),
+      **norm(f"{name}.norm2", f"P_{name}_inner2"),
+      **conv(f"{name}.conv3", f"P_{name}_inner2", p_out),
+      **norm(f"{name}.norm3", p_out),
+  }
+  
+  shortcut_bottleneck = lambda name, p_in, p_out: {
+      **conv(f"{name}.conv1", p_in, f"P_{name}_inner1"),
+      **norm(f"{name}.norm1", f"P_{name}_inner1"),
+      **conv(f"{name}.conv2", f"P_{name}_inner1", f"P_{name}_inner2"),
+      **norm(f"{name}.norm2", f"P_{name}_inner2"),
+      **conv(f"{name}.conv3", f"P_{name}_inner2", p_out),
+      **norm(f"{name}.norm3", p_out),
+      **conv(f"{name}.shortcut.0", p_in, p_out),
+      **norm(f"{name}.shortcut.1", p_out),
+  }
+  
+  spec_dict = {
+      **conv("conv1", None, "P_bg0"),
+      **norm("norm1", "P_bg0"),
+      
+      # Layer 1 (3 blocks)
+      **shortcut_bottleneck("layer1.0", "P_bg0", "P_bg0_x4"),
+      **bottleneck("layer1.1", "P_bg0_x4", "P_bg0_x4"),
+      **bottleneck("layer1.2", "P_bg0_x4", "P_bg0_x4"),
+  }
+  
+  # Layer 2 (8 blocks)
+  spec_dict.update(shortcut_bottleneck("layer2.0", "P_bg0_x4", "P_bg1_x4"))
+  for i in range(1, 8):
+      spec_dict.update(bottleneck(f"layer2.{i}", "P_bg1_x4", "P_bg1_x4"))
+  
+  # Layer 3 (36 blocks)
+  spec_dict.update(shortcut_bottleneck("layer3.0", "P_bg1_x4", "P_bg2_x4"))
+  for i in range(1, 36):
+      spec_dict.update(bottleneck(f"layer3.{i}", "P_bg2_x4", "P_bg2_x4"))
+  
+  # Layer 4 (3 blocks)
+  spec_dict.update(shortcut_bottleneck("layer4.0", "P_bg2_x4", "P_bg3_x4"))
+  spec_dict.update(bottleneck("layer4.1", "P_bg3_x4", "P_bg3_x4"))
+  spec_dict.update(bottleneck("layer4.2", "P_bg3_x4", "P_bg3_x4"))
+  
+  spec_dict.update(dense("linear", "P_bg3_x4", None))
+  
+  return permutation_spec_from_axes_to_perm(spec_dict)
+
 def reverse_permutation_list(permutation):
   inverse_perm = [0] * len(permutation)
   for i, p in enumerate(permutation):
@@ -79,23 +294,6 @@ def reverse_permutation_list(permutation):
   inverse_perm = jnp.array(inverse_perm)
   return inverse_perm
 
-# def reverse_permutation(vector, permutation, axis=0):
-#   inverse_perm = [0] * len(permutation)
-#   for i, p in enumerate(permutation):
-#       inverse_perm[p] = i
-  
-#   inverse_perm = jnp.array(inverse_perm)
-  
-#   ndim = vector.ndim
-#   idx = tuple(inverse_perm if i == axis else jnp.arange(vector.shape[i]) for i in range(ndim))
-  
-#   grid = jnp.meshgrid(*idx, indexing='ij')
-#   try:
-#     result = vector[tuple(grid)]
-#   except:
-#     breakpoint()
-#   return result
-  
 def get_reverse_permuted_param(ps: PermutationSpec, perm, k: str, params):
   w = params[k]
   w = jnp.array(w)
@@ -104,9 +302,6 @@ def get_reverse_permuted_param(ps: PermutationSpec, perm, k: str, params):
       # w = reverse_permutation(w, perm[p], axis)
       w = jnp.take(w, reverse_permutation_list(perm[p]), axis=axis)
   return w
-
-def reverse_permutation_model(ps: PermutationSpec, perm, params):
-  return {k: torch.from_numpy(np.array(get_reverse_permuted_param(ps, perm, k, params))) for k in params.keys()}
 
 def get_permuted_param(ps: PermutationSpec, perm, k: str, params, except_axis=None):
   """Get parameter `k` from `params`, with the permutations applied."""
@@ -165,29 +360,3 @@ def weight_matching(rng,
     if not progress:
       break
   return perm
-
-if __name__ == "__main__":
-  def test_reverse_permutation():
-      shape = (4, 3, 2, 5)
-      test_array = jnp.arange(np.prod(shape)).reshape(shape)
-      
-      permutation = [1, 0, 3, 2]
-      manual_permuted = jnp.stack([test_array[p] for p in permutation])
-      restored_array = reverse_permutation(manual_permuted, permutation, axis=0)
-      is_equal = jnp.array_equal(test_array, restored_array)
-      print(f"Test for axis 0: {'Passed' if is_equal else 'Failed'}")
-
-      permutation = [1, 0, 2]
-      manual_permuted = jnp.stack([test_array[:,p] for p in permutation], axis=1)
-      restored_array = reverse_permutation(manual_permuted, permutation, axis=1)
-      is_equal = jnp.array_equal(test_array, restored_array)
-      print(f"Test for axis 1: {'Passed' if is_equal else 'Failed'}")
-
-      permutation = [1, 0]
-      manual_permuted = jnp.stack([test_array[:,:,p] for p in permutation], axis=2)
-      restored_array = reverse_permutation(manual_permuted, permutation, axis=2)
-      is_equal = jnp.array_equal(test_array, restored_array)
-      print(f"Test for axis 2: {'Passed' if is_equal else 'Failed'}")
-
-  # Run the test
-  test_reverse_permutation()
