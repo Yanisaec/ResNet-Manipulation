@@ -10,8 +10,8 @@ from utils import *
 _batchsize=8
 _seed=42
 _train=False
-_test_resnet18=False
-_test_resnet34=False
+_test_resnet18=True
+_test_resnet34=True
 _test_resnet50=True
 _test_resnet101=False
 _test_resnet152=False

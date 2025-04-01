@@ -424,20 +424,20 @@ def widen_resnet(model, new_hidden_sizes=[64, 128, 256, 512], model_type=None, n
             
             # Shortcut modules (if exists)
             if len(block.shortcut) > 0:
+                modules[f'l{layer_idx}_b{block_idx}_shortcut_conv'] = copy.deepcopy(block.shortcut[0])
+                modules[f'l{layer_idx}_b{block_idx}_shortcut_norm'] = copy.deepcopy(block.shortcut[1])
+                modules[f'l{layer_idx}_b{block_idx+1}_conv1_for_sc'] = copy.deepcopy(future_block.conv1)
                 if layer_idx > 1:
-                    modules[f'l{layer_idx-1}_b{prev_block_idx}_conv2_for_sc'] = copy.deepcopy(prev_block.conv2)
-                    modules[f'l{layer_idx-1}_b{prev_block_idx}_norm2_for_sc'] = copy.deepcopy(prev_block.norm2)
-                    modules[f'l{layer_idx}_b{block_idx+1}_conv1_for_sc'] = copy.deepcopy(future_block.conv1)
-                    modules[f'l{layer_idx}_b{block_idx}_shortcut_conv'] = copy.deepcopy(block.shortcut[0])
-                    modules[f'l{layer_idx}_b{block_idx}_shortcut_norm'] = copy.deepcopy(block.shortcut[1])                    
+                    if not is_bottleneck:
+                        modules[f'l{layer_idx-1}_b{prev_block_idx}_conv2_for_sc'] = copy.deepcopy(prev_block.conv2)
+                        modules[f'l{layer_idx-1}_b{prev_block_idx}_norm2_for_sc'] = copy.deepcopy(prev_block.norm2)
+                    else:
+                        modules[f'l{layer_idx-1}_b{prev_block_idx}_conv3_for_sc'] = copy.deepcopy(prev_block.conv3)
+                        modules[f'l{layer_idx-1}_b{prev_block_idx}_norm3_for_sc'] = copy.deepcopy(prev_block.norm3)
                 else:
                     modules[f'conv1_for_sc'] = copy.deepcopy(model.conv1)
                     modules[f'norm1_for_sc'] = copy.deepcopy(model.norm1)
-                    modules[f'l{layer_idx}_b{block_idx+1}_conv1_for_sc'] = copy.deepcopy(future_block.conv1)
-                    modules[f'l{layer_idx}_b{block_idx}_shortcut_conv'] = copy.deepcopy(block.shortcut[0])
-                    modules[f'l{layer_idx}_b{block_idx}_shortcut_norm'] = copy.deepcopy(block.shortcut[1])
-
-            
+                    
             prev_block_idx = block_idx
     
     # Final linear layer
@@ -503,15 +503,15 @@ def widen_resnet(model, new_hidden_sizes=[64, 128, 256, 512], model_type=None, n
                 if len(layer[block_idx].shortcut) > 0:
                     shortcut_in_width = new_hidden_sizes[layer_idx-2] * expansion if layer_idx > 1 else new_hidden_sizes[0]
                     connections.append((
-                        f'l{prev_layer_idx}_b{prev_block_idx}_conv3' if prev_block_idx >= 0 else 'conv1_for_sc',
+                        f'l{prev_layer_idx}_b{prev_block_idx}_conv3_for_sc' if prev_block_idx >= 0 else 'conv1_for_sc',
                         f'l{layer_idx}_b{block_idx}_shortcut_conv',
-                        f'l{prev_layer_idx}_b{prev_block_idx}_norm3' if prev_block_idx >= 0 else 'norm1_for_sc',
+                        f'l{prev_layer_idx}_b{prev_block_idx}_norm3_for_sc' if prev_block_idx >= 0 else 'norm1_for_sc',
                         shortcut_in_width
                     ))
                     
                     connections.append((
                         f'l{layer_idx}_b{block_idx}_shortcut_conv',
-                        f'l{layer_idx}_b{block_idx+1}_conv1' if block_idx < len(layer) - 1 else f'l{layer_idx+1}_b0_conv1' if layer_idx < 4 else 'linear',
+                        f'l{layer_idx}_b{block_idx+1}_conv1_for_sc' if block_idx < len(layer) - 1 else f'l{layer_idx+1}_b0_conv1' if layer_idx < 4 else 'linear',
                         f'l{layer_idx}_b{block_idx}_shortcut_norm',
                         current_width * expansion
                     ))
@@ -563,8 +563,11 @@ def widen_resnet(model, new_hidden_sizes=[64, 128, 256, 512], model_type=None, n
     mapping = {}
     for m1_name, m2_name, bn_name, new_width in connections:
         if not m1_name in modules or not m2_name in modules:
-            continue  # Skip if modules don't exist
+            continue
         
+        # if 'l2_b0_conv1' in m1_name or 'l2_b0_conv1' in m2_name:
+        #     breakpoint()
+
         m1 = modules[m1_name]
         m2 = modules[m2_name]
         bn = modules[bn_name] if bn_name in modules else None
@@ -573,31 +576,95 @@ def widen_resnet(model, new_hidden_sizes=[64, 128, 256, 512], model_type=None, n
         if m1_name == 'conv1' and forced_mapping is not None:
             rm = forced_mapping['conv1']
         elif m1_name != 'conv1' and 'l1' in m1_name:
-            if forced_mapping is not None:
-                rm = forced_mapping['conv1']
+            if not is_bottleneck:
+                if forced_mapping is not None:
+                    rm = forced_mapping['conv1']
+                else:
+                    rm = mapping['conv1']
             else:
-                rm = mapping['conv1']
+                if 'conv3' not in m1_name and 'shortcut' not in m1_name:
+                    if forced_mapping is not None:
+                        rm = forced_mapping['conv1']
+                    else:
+                        rm = mapping['conv1']
+                else:
+                    if 'b0' not in m1_name or 'shortcut' in m1_name:
+                        if forced_mapping is not None:
+                            rm = forced_mapping['l1_b0_conv3']
+                        else:
+                            rm = mapping['l1_b0_conv3']
+                    else:
+                        rm = None
         elif m1_name != 'l2_b0_conv1' and 'l2' in m1_name:
-            if forced_mapping is not None:
-                rm = forced_mapping['l2_b0_conv1']
+            if not is_bottleneck:
+                if forced_mapping is not None:
+                    rm = forced_mapping['l2_b0_conv1']
+                else:
+                    rm = mapping['l2_b0_conv1']
             else:
-                rm = mapping['l2_b0_conv1']
+                if 'conv3' not in m1_name and 'shortcut' not in m1_name:
+                    if forced_mapping is not None:
+                        rm = forced_mapping['l2_b0_conv1']
+                    else:
+                        rm = mapping['l2_b0_conv1']
+                else:
+                    if 'b0' not in m1_name or 'shortcut' in m1_name:
+                        if forced_mapping is not None:
+                            rm = forced_mapping['l2_b0_conv3']
+                        else:
+                            rm = mapping['l2_b0_conv3']
+                    else:
+                        rm = None
         elif m1_name != 'l3_b0_conv1' and 'l3' in m1_name:
-            if forced_mapping is not None:
-                rm = forced_mapping['l3_b0_conv1']
+            if not is_bottleneck:
+                if forced_mapping is not None:
+                    rm = forced_mapping['l3_b0_conv1']
+                else:
+                    rm = mapping['l3_b0_conv1']
             else:
-                rm = mapping['l3_b0_conv1']
+                if 'conv3' not in m1_name and 'shortcut' not in m1_name:
+                    if forced_mapping is not None:
+                        rm = forced_mapping['l3_b0_conv1']
+                    else:
+                        rm = mapping['l3_b0_conv1']
+                else:
+                    if 'b0' not in m1_name or 'shortcut' in m1_name:
+                        if forced_mapping is not None:
+                            rm = forced_mapping['l3_b0_conv3']
+                        else:
+                            rm = mapping['l3_b0_conv3']
+                    else:
+                        rm = None
         elif m1_name != 'l4_b0_conv1' and 'l4' in m1_name:
-            if forced_mapping is not None:
-                rm = forced_mapping['l4_b0_conv1']
+            if not is_bottleneck:
+                if forced_mapping is not None:
+                    rm = forced_mapping['l4_b0_conv1']
+                else:
+                    rm = mapping['l4_b0_conv1']
             else:
-                rm = mapping['l4_b0_conv1']
+                if 'conv3' not in m1_name and 'shortcut' not in m1_name:
+                    if forced_mapping is not None:
+                        rm = forced_mapping['l4_b0_conv1']
+                    else:
+                        rm = mapping['l4_b0_conv1']
+                else:
+                    if 'b0' not in m1_name or 'shortcut' in m1_name:
+                        if forced_mapping is not None:
+                            rm = forced_mapping['l4_b0_conv3']
+                        else:
+                            rm = mapping['l4_b0_conv3']
+                    else:
+                        rm = None
+                        
         elif forced_mapping is not None:
             rm = forced_mapping[m1_name]
         else:
             rm = None
             
-        m1, m2, bn, random_mapping = wider(om1=m1, om2=m2, new_width=new_width, bnorm=bn, noise=noise, random_init=random_init, weight_norm=weight_norm, random_mapping=rm, divide=divide)
+        try:
+            m1, m2, bn, random_mapping = wider(om1=m1, om2=m2, new_width=new_width, bnorm=bn, noise=noise, random_init=random_init, weight_norm=weight_norm, random_mapping=rm, divide=divide)
+        except:
+            breakpoint()
 
         mapping[m1_name] = random_mapping
 
