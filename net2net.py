@@ -575,7 +575,7 @@ def widen_resnet(model, new_hidden_sizes=[64, 128, 256, 512], model_type=None, n
         # Apply wider operation
         if m1_name == 'conv1' and forced_mapping is not None:
             rm = forced_mapping['conv1']
-        elif m1_name != 'conv1' and 'l1' in m1_name:
+        elif (m1_name != 'conv1' and 'l1' in m1_name) or m1_name == 'conv1_for_sc':
             if not is_bottleneck:
                 if forced_mapping is not None:
                     rm = forced_mapping['conv1']
@@ -660,7 +660,7 @@ def widen_resnet(model, new_hidden_sizes=[64, 128, 256, 512], model_type=None, n
             rm = forced_mapping[m1_name]
         else:
             rm = None
-            
+
         try:
             m1, m2, bn, random_mapping = wider(om1=m1, om2=m2, new_width=new_width, bnorm=bn, noise=noise, random_init=random_init, weight_norm=weight_norm, random_mapping=rm, divide=divide)
         except:
