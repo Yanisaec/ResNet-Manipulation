@@ -532,7 +532,7 @@ def widen_resnet(model, new_hidden_sizes=[64, 128, 256, 512], model_type=None, n
     
     return model, mapping
 
-def unwiden_resnet18(model_original_dict, model_widened_dict):
+def unwiden_resnet(model_original_dict, model_widened_dict):
     unwidened_model_dict = {}
     for key in model_original_dict:
         w_original = model_original_dict[key]
