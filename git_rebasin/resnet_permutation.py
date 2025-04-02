@@ -58,6 +58,7 @@ def reverse_permutation_model(ps: PermutationSpec, perm, params):
 
 def test_permutation(model1, model2, dataloader, resnet_model: str, nb_batches=100):
     averaged_model = average_models([model1, model2])
+    print('Averaged Model Before Permutation:')
     evaluate_model(dataloader, averaged_model, nb_batches, print_=True)
 
     acc1, acc2 = compare_model_performances(dataloader, model1, model2, nb_batches, print_=False)
@@ -68,6 +69,6 @@ def test_permutation(model1, model2, dataloader, resnet_model: str, nb_batches=1
 
     averaged_model = average_models([model1, model2])
 
-    print('After Permutation:')
+    print('Averaged Model After Permutation:')
     
     evaluate_model(dataloader, averaged_model, nb_batches, print_=True)

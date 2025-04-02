@@ -550,7 +550,8 @@ def unwiden_resnet18(model_original_dict, model_widened_dict):
     return unwidened_model_dict
 
 def test_widen(model, new_hidden_sizes=[64, 128, 256, 512], model_type=None, divide=True):
-    dummy = th.randn(1, 3, 32, 32)
+    model.cuda()
+    dummy = th.randn(1, 3, 32, 32).cuda()
     output_original = model(dummy)
     model_widened, _ = widen_resnet(model, new_hidden_sizes=new_hidden_sizes, model_type=model_type, divide=divide)
     new_output = model_widened(dummy)

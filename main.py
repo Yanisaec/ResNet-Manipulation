@@ -1,16 +1,18 @@
 from torch.utils.data import DataLoader
+import torch
+import numpy as np
+import os
 
-from resnet import *
-from datasets.dataset import *
-from git_rebasin.resnet_permutation import *
-from net2net import *
-from utils import *
+from resnet import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
+from datasets.dataset import fetch_dataset
+from git_rebasin.resnet_permutation import test_permutation
+from net2net import test_widen
 
 _batchsize=8
 _seed=42
-_train=True
-_permute=False
-_widen=False
+_train=False
+_permute=True
+_widen=True
 
 torch.manual_seed(_seed)
 torch.cuda.manual_seed(_seed)
@@ -39,7 +41,8 @@ def test_resnet(train=False, widen=False, permute=False, model_type=False, datal
             model2 = ResNet152(hidden_sizes=hidden_sizes, n_class=n_class)
         case _:
             raise Exception(f'The following ResNet architecture is not supported: {model_type}')
-        
+    print(f'Testing ResNet{model_type}:')
+    print('------------------------------------------------------------------')
     cp = f'checkpoints/resnet{model_type}.pt'
     if train:
         train_model(dataloader_train, model1, 2, cp)
@@ -51,6 +54,8 @@ def test_resnet(train=False, widen=False, permute=False, model_type=False, datal
     
     if widen:
         test_widen(model1, model_type=model_type)
+
+    print('------------------------------------------------------------------')
         
 
 def main():
@@ -62,6 +67,5 @@ def main():
     for model_type in model_types:
         test_resnet(train=_train, widen=_widen, permute=_permute, model_type=model_type, dataloader_train=dataloader_train, dataloader_test=dataloader_test)
 
-        
 if __name__ == "__main__":
     main()
